@@ -1,0 +1,235 @@
+"""
+Multi-Model CAD Analyzer
+Supports Gemini (via OpenRouter) + other OpenRouter models
+"""
+
+import os
+import io
+import base64
+import httpx
+import logging
+from typing import Dict, Optional
+from pathlib import Path
+
+logger = logging.getLogger(__name__)
+
+class MultiModelCADAnalyzer:
+    """Advanced CAD analyzer supporting multiple AI models"""
+    
+    MODELS = {
+        "google/gemini-2.0-flash-exp:free": {
+            "name": "Gemini 2.0 Flash (Free)",
+            "provider": "OPENROUTER",
+            "capabilities": ["vision", "fast"],
+            "context_window": "1M tokens",
+            "free": True,
+            "notes": "Google's Gemini via OpenRouter - free tier"
+        },
+        "deepseek/deepseek-r1": {
+            "name": "DeepSeek R1",
+            "provider": "OPENROUTER",
+            "capabilities": ["reasoning", "advanced"],
+            "context_window": "64K tokens",
+            "free": False,
+            "notes": "Excellent reasoning, chain-of-thought analysis"
+        },
+        "nvidia/nemotron-nano-12b-v2-vl:free": {
+            "name": "NVIDIA Nemotron Nano VL",
+            "provider": "OPENROUTER",
+            "capabilities": ["vision", "technical"],
+            "context_window": "32K tokens",
+            "free": True,
+            "notes": "Optimized for technical diagrams"
+        },
+        "qwen/qwen3-235b-a22b": {
+            "name": "Qwen 3 235B",
+            "provider": "OPENROUTER",
+            "capabilities": ["reasoning", "advanced"],
+            "context_window": "32K tokens",
+            "free": False,
+            "notes": "Large reasoning model, excellent for complex analysis"
+        }
+    }
+    
+    def __init__(self, gemini_api_key: str = None, openrouter_api_key: str = None):
+        """Initialize with OpenRouter API key (Gemini direct key no longer used)"""
+        self.openrouter_api_key = openrouter_api_key or os.getenv('OPENROUTER_API_KEY')
+        
+        if not self.openrouter_api_key:
+            raise ValueError("OPENROUTER_API_KEY not found")
+        
+        logger.info("✅ Initialized with OpenRouter (all models including Gemini)")
+    
+    async def analyze_with_openrouter(
+        self,
+        image_bytes: Optional[bytes],
+        prompt: str,
+        model_id: str
+    ) -> str:
+        """Analyze with any OpenRouter model (including Gemini)"""
+        try:
+            url = "https://openrouter.ai/api/v1/chat/completions"
+            
+            headers = {
+                "Authorization": f"Bearer {self.openrouter_api_key}",
+                "Content-Type": "application/json",
+                "HTTP-Referer": "https://documind.app",
+                "X-Title": "DocuMind CAD Analyzer"
+            }
+            
+            # Build message content
+            if image_bytes:
+                # Vision request
+                base64_image = base64.b64encode(image_bytes).decode('utf-8')
+                message_content = [
+                    {
+                        "type": "text",
+                        "text": prompt
+                    },
+                    {
+                        "type": "image_url",
+                        "image_url": {
+                            "url": f"data:image/png;base64,{base64_image}"
+                        }
+                    }
+                ]
+            else:
+                # Text-only
+                message_content = prompt
+            
+            payload = {
+                "model": model_id,
+                "messages": [
+                    {
+                        "role": "user",
+                        "content": message_content
+                    }
+                ]
+            }
+            
+            async with httpx.AsyncClient(timeout=60.0) as client:
+                response = await client.post(url, headers=headers, json=payload)
+                response.raise_for_status()
+                
+                data = response.json()
+                return data['choices'][0]['message']['content']
+                
+        except httpx.HTTPStatusError as e:
+            raise Exception(f"OpenRouter API error ({e.response.status_code}): {e.response.text}")
+        except Exception as e:
+            raise Exception(f"OpenRouter request failed: {e}")
+    
+    async def comprehensive_analysis(
+        self,
+        png_path: str,
+        model_id: str = "google/gemini-2.0-flash-exp:free"
+    ) -> Dict:
+        """
+        Run comprehensive 5-stage CAD analysis
+        Default model is now free Gemini via OpenRouter
+        """
+        if not Path(png_path).exists():
+            raise FileNotFoundError(f"PNG file not found: {png_path}")
+        
+        # Get model info
+        model_info = self.MODELS.get(model_id)
+        if not model_info:
+            raise ValueError(f"Unknown model: {model_id}")
+        
+        # Check vision support
+        if 'vision' not in model_info['capabilities']:
+            raise ValueError(f"Model {model_id} doesn't support vision analysis")
+        
+        logger.info(f"🔍 Starting 5-stage analysis with {model_info['name']}...")
+        
+        # Read image once
+        with open(png_path, 'rb') as f:
+            image_bytes = f.read()
+        
+        # Define all 5 stages
+        stages = {
+            "stage_1_overview": """Analyze this CAD drawing and provide:
+1. Drawing type (mechanical, architectural, electrical, etc.)
+2. Primary purpose and application
+3. Overall complexity level
+4. Key features visible""",
+            
+            "stage_2_technical": """Analyze technical aspects:
+1. Dimensions and measurements shown
+2. Technical standards or specifications referenced
+3. Annotations and notes
+4. Scale and units used""",
+            
+            "stage_3_components": """List and describe:
+1. Major components and parts
+2. Assembly relationships
+3. Materials specified (if any)
+4. Special features or mechanisms""",
+            
+            "stage_4_measurements": """Extract all measurements:
+1. Critical dimensions
+2. Tolerances specified
+3. Angular measurements
+4. Any geometric constraints""",
+            
+            "stage_5_quality": """Assess drawing quality:
+1. Clarity and readability
+2. Completeness of information
+3. Potential issues or ambiguities
+4. Recommendations for improvement"""
+        }
+        
+        # Run each stage
+        results = {}
+        for i, (stage_name, prompt) in enumerate(stages.items(), 1):
+            logger.info(f"  Stage {i}/5: {stage_name.replace('_', ' ').title()}...")
+            results[stage_name] = await self.analyze_with_openrouter(
+                image_bytes, 
+                prompt, 
+                model_id
+            )
+        
+        # Generate executive summary (text-only)
+        logger.info("  Generating executive summary...")
+        summary_prompt = f"""Based on this CAD analysis, provide a concise 2-3 sentence executive summary:
+
+Overview: {results['stage_1_overview'][:200]}...
+Technical: {results['stage_2_technical'][:200]}...
+Components: {results['stage_3_components'][:200]}..."""
+        
+        executive_summary = await self.analyze_with_openrouter(
+            None,  # No image for summary
+            summary_prompt,
+            model_id
+        )
+        
+        return {
+            "model_used": model_info['name'],
+            "model_id": model_id,
+            "executive_summary": executive_summary,
+            **results
+        }
+    
+    def format_for_rag(self, analysis_results: Dict) -> str:
+        """Format analysis results for RAG indexing"""
+        formatted = f"""CAD DRAWING ANALYSIS (Analyzed by {analysis_results['model_used']})
+
+EXECUTIVE SUMMARY:
+{analysis_results['executive_summary']}
+
+OVERVIEW ANALYSIS:
+{analysis_results['stage_1_overview']}
+
+TECHNICAL DETAILS:
+{analysis_results['stage_2_technical']}
+
+COMPONENTS & FEATURES:
+{analysis_results['stage_3_components']}
+
+MEASUREMENTS & DIMENSIONS:
+{analysis_results['stage_4_measurements']}
+
+QUALITY ASSESSMENT:
+{analysis_results['stage_5_quality']}
+"""
+        return formatted

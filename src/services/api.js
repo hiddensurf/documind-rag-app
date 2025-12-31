@@ -1,0 +1,168 @@
+import axios from 'axios';
+
+const API_BASE_URL = import.meta.env.VITE_API_URL || 'http://localhost:8000/api';
+
+const api = axios.create({
+  baseURL: API_BASE_URL,
+  headers: {
+    'Content-Type': 'application/json',
+  },
+  timeout: 180000, // 3 minutes
+});
+
+// Helper function to transform snake_case to camelCase
+const transformResponse = (data) => {
+  if (!data) return data;
+  
+  if (Array.isArray(data)) {
+    return data.map(transformResponse);
+  }
+  
+  if (typeof data === 'object') {
+    const transformed = {};
+    for (const key in data) {
+      const camelKey = key.replace(/_([a-z])/g, (_, letter) => letter.toUpperCase());
+      transformed[camelKey] = transformResponse(data[key]);
+    }
+    return transformed;
+  }
+  
+  return data;
+};
+
+// ============= DOCUMENT MANAGEMENT =============
+
+export const uploadDocument = async (file) => {
+  const formData = new FormData();
+  formData.append('file', file);
+  
+  const response = await api.post('/documents/upload', formData, {
+    headers: {
+      'Content-Type': 'multipart/form-data',
+    },
+  });
+  
+  return transformResponse(response.data);
+};
+
+export const getDocuments = async () => {
+  const response = await api.get('/documents');
+  return transformResponse(response.data);
+};
+
+export const deleteDocument = async (documentId) => {
+  const response = await api.delete(`/documents/${documentId}`);
+  return transformResponse(response.data);
+};
+
+// ============= CONVERSATION MANAGEMENT =============
+
+export const createConversation = async (documentIds = []) => {
+  const response = await api.post('/conversations', {
+    document_ids: documentIds
+  });
+  return transformResponse(response.data);
+};
+
+export const getConversations = async () => {
+  const response = await api.get('/conversations');
+  return transformResponse(response.data);
+};
+
+export const getConversation = async (conversationId) => {
+  const response = await api.get(`/conversations/${conversationId}`);
+  return transformResponse(response.data);
+};
+
+export const updateConversationTitle = async (conversationId, title) => {
+  const response = await api.put(`/conversations/${conversationId}/title`, {
+    title
+  });
+  return transformResponse(response.data);
+};
+
+export const updateConversationDocuments = async (conversationId, documentIds) => {
+  const response = await api.put(`/conversations/${conversationId}/documents`, {
+    document_ids: documentIds
+  });
+  return transformResponse(response.data);
+};
+
+export const deleteConversation = async (conversationId) => {
+  const response = await api.delete(`/conversations/${conversationId}`);
+  return transformResponse(response.data);
+};
+
+// ============= CHAT =============
+
+export const sendMessage = async (conversationId, query, documentIds = []) => {
+  console.log('API: Sending message to conversation:', conversationId);
+  const response = await api.post(`/conversations/${conversationId}/messages`, {
+    query,
+    document_ids: documentIds,
+  });
+  
+  const transformed = transformResponse(response.data);
+  console.log('API: Transformed response:', transformed);
+  return transformed;
+};
+
+export const sendChatMessage = sendMessage;
+
+export const generateMindMap = async (conversationId, query, documentIds = []) => {
+  console.log('API: Generating mind map for conversation:', conversationId);
+  const response = await api.post(`/conversations/${conversationId}/mindmap`, {
+    query,
+    document_ids: documentIds,
+  });
+  
+  const transformed = transformResponse(response.data);
+  console.log('API: Mind map response:', transformed);
+  return transformed;
+};
+
+// ============= AI ANALYSIS =============
+
+export const runAdvancedAnalysis = async (conversationId, query, documentIds = [], modelId = null) => {
+  console.log('API: Running advanced vision analysis for conversation:', conversationId);
+  const payload = {
+    message: query,
+    document_ids: documentIds
+  };
+  
+  if (modelId) {
+    payload.model = modelId;
+  }
+  
+  const response = await api.post(`/conversations/${conversationId}/advanced-analysis`, payload);
+  
+  const transformed = transformResponse(response.data);
+  console.log('API: Advanced analysis response:', transformed);
+  return transformed;
+};
+
+export const runHybridAnalysis = async (conversationId, query, documentIds = [], modelId = null) => {
+  console.log('API: Running hybrid CV+AI analysis for conversation:', conversationId);
+  const payload = {
+    message: query,
+    document_ids: documentIds
+  };
+  
+  if (modelId) {
+    payload.model = modelId;
+  }
+  
+  const response = await api.post(`/conversations/${conversationId}/hybrid-analysis`, payload);
+  
+  const transformed = transformResponse(response.data);
+  console.log('API: Hybrid analysis response:', transformed);
+  return transformed;
+};
+
+export const getAvailableModels = async () => {
+  console.log('API: Fetching available AI models');
+  const response = await api.get('/models');
+  return transformResponse(response.data);
+};
+
+export default api;

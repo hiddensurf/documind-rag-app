@@ -1,0 +1,93 @@
+{
+  "file_id": "abc123def456",
+  "sheet_id": "Model",
+  "source_file": "mechanical_drawing.dxf",
+  "conversion_status": "success",
+  "parsed_at": "2025-12-10T14:30:00.123456",
+  "units": "millimeters",
+  "scale": 1.0,
+  "dxf_version": "AC1027",
+  "extents": {
+    "min": [0.0, 0.0],
+    "max": [1000.0, 800.0]
+  },
+  "layers": [
+    "0",
+    "DIMENSIONS",
+    "TEXT",
+    "WALLS",
+    "FIXTURES"
+  ],
+  "entities": [
+    {
+      "id": "ent_000001",
+      "type": "TEXT",
+      "raw_text": "Main Chamber",
+      "layer": "TEXT",
+      "block": null,
+      "bbox_world": [100.0, 200.0, 250.0, 220.0],
+      "bbox_norm": [0.1, 0.25, 0.25, 0.275],
+      "extra": {
+        "height": 20.0,
+        "rotation": 0.0,
+        "style": "Standard"
+      }
+    },
+    {
+      "id": "ent_000002",
+      "type": "DIMENSION",
+      "raw_text": "500",
+      "layer": "DIMENSIONS",
+      "block": null,
+      "bbox_world": [300.0, 400.0, 800.0, 420.0],
+      "bbox_norm": [0.3, 0.5, 0.8, 0.525],
+      "extra": {
+        "dim_type": "LINEAR"
+      }
+    },
+    {
+      "id": "ent_000003",
+      "type": "LINE",
+      "raw_text": null,
+      "layer": "WALLS",
+      "block": null,
+      "bbox_world": [100.0, 100.0, 900.0, 100.0],
+      "bbox_norm": [0.1, 0.125, 0.9, 0.125],
+      "extra": {}
+    },
+    {
+      "id": "ent_000004",
+      "type": "CIRCLE",
+      "raw_text": null,
+      "layer": "FIXTURES",
+      "block": null,
+      "bbox_world": [450.0, 350.0, 550.0, 450.0],
+      "bbox_norm": [0.45, 0.4375, 0.55, 0.5625],
+      "extra": {}
+    },
+    {
+      "id": "ent_000005",
+      "type": "MTEXT",
+      "raw_text": "Assembly Instructions:\n1. Install fixture A\n2. Align with reference",
+      "layer": "TEXT",
+      "block": null,
+      "bbox_world": [50.0, 50.0, 200.0, 120.0],
+      "bbox_norm": [0.05, 0.0625, 0.2, 0.15],
+      "extra": {
+        "char_height": 10.0,
+        "line_count": 3
+      }
+    }
+  ],
+  "statistics": {
+    "total_entities": 5,
+    "text_entities": 1,
+    "mtext_entities": 1,
+    "dimension_entities": 1,
+    "line_entities": 1,
+    "circle_entities": 1,
+    "arc_entities": 0,
+    "other_entities": 0
+  }
+}
+

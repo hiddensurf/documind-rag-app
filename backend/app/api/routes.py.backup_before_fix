@@ -1,0 +1,683 @@
+import os
+import os
+from fastapi import APIRouter, UploadFile, File, HTTPException
+from typing import List
+import logging
+from app.models.schemas import (
+    DocumentUploadResponse,
+    ChatRequest,
+    ChatResponse,
+    DocumentInfo,
+)
+from app.models.conversation import (
+    Conversation,
+    Message,
+    CreateConversationRequest,
+    UpdateConversationTitleRequest
+)
+from app.services.document_service import document_service
+from app.services.conversation_service import conversation_service
+from app.services.rag_service import get_rag_service
+from datetime import datetime
+from pydantic import BaseModel
+
+logger = logging.getLogger(__name__)
+router = APIRouter()
+
+class UpdateDocumentsRequest(BaseModel):
+    document_ids: List[str]
+
+# ============= DOCUMENT ENDPOINTS =============
+
+@router.post("/documents/upload", response_model=DocumentUploadResponse)
+async def upload_document(file: UploadFile = File(...)):
+    """Upload and index a document"""
+    try:
+        allowed_extensions = {
+    '.pdf', '.docx', '.txt', '.md',           # Documents
+    '.dwg', '.dxf', '.stl',                   # CAD/3D
+    '.png', '.jpg', '.jpeg', '.gif', '.svg',  # Images
+    '.pptx', '.xlsx', '.csv',                 # Office
+    '.html', '.xml', '.json',                 # Data
+    '.rtf', '.odt', '.epub'                   # Other docs
+}
+        file_ext = file.filename[file.filename.rfind('.'):].lower()
+        
+        if file_ext not in allowed_extensions:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Unsupported file type. Allowed: {', '.join(allowed_extensions)}"
+            )
+        
+        doc_metadata = await document_service.upload_document(file, file.filename)
+        
+        return DocumentUploadResponse(
+            id=doc_metadata["id"],
+            name=doc_metadata["name"],
+            size=doc_metadata["size"],
+            upload_date=doc_metadata["upload_date"],
+            status=doc_metadata["status"]
+        )
+        
+    except Exception as e:
+        logger.error(f"Error in upload endpoint: {str(e)}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+@router.get("/documents", response_model=List[DocumentInfo])
+async def get_documents():
+    """Get all uploaded documents"""
+    try:
+        documents = document_service.get_documents()
+        return [
+            DocumentInfo(
+                id=doc["id"],
+                name=doc["name"],
+                size=doc["size"],
+                upload_date=doc["upload_date"],
+                status=doc["status"]
+            )
+            for doc in documents
+        ]
+    except Exception as e:
+        logger.error(f"Error getting documents: {str(e)}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+@router.delete("/documents/{doc_id}")
+async def delete_document(doc_id: str):
+    """Delete a document"""
+    try:
+        success = document_service.delete_document(doc_id)
+        if not success:
+            raise HTTPException(status_code=404, detail="Document not found")
+        return {"message": "Document deleted successfully", "id": doc_id}
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error deleting document: {str(e)}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+# ============= CONVERSATION ENDPOINTS =============
+
+@router.post("/conversations", response_model=Conversation)
+async def create_conversation(request: CreateConversationRequest):
+    """Create a new conversation"""
+    try:
+        conversation = conversation_service.create_conversation(
+            document_ids=request.document_ids
+        )
+        return conversation
+    except Exception as e:
+        logger.error(f"Error creating conversation: {str(e)}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+@router.get("/conversations", response_model=List[Conversation])
+async def get_conversations():
+    """Get all conversations"""
+    try:
+        conversations = conversation_service.get_all_conversations()
+        return conversations
+    except Exception as e:
+        logger.error(f"Error getting conversations: {str(e)}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+@router.get("/conversations/{conv_id}", response_model=Conversation)
+async def get_conversation(conv_id: str):
+    """Get a specific conversation"""
+    try:
+        conversation = conversation_service.get_conversation(conv_id)
+        if not conversation:
+            raise HTTPException(status_code=404, detail="Conversation not found")
+        return conversation
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error getting conversation: {str(e)}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+@router.put("/conversations/{conv_id}/title", response_model=Conversation)
+async def update_conversation_title(
+    conv_id: str, 
+    request: UpdateConversationTitleRequest
+):
+    """Update conversation title"""
+    try:
+        conversation = conversation_service.update_title(conv_id, request.title)
+        if not conversation:
+            raise HTTPException(status_code=404, detail="Conversation not found")
+        return conversation
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error updating conversation title: {str(e)}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+@router.put("/conversations/{conv_id}/documents", response_model=Conversation)
+async def update_conversation_documents(
+    conv_id: str,
+    request: UpdateDocumentsRequest
+):
+    """Update conversation documents"""
+    try:
+        conversation = conversation_service.update_documents(conv_id, request.document_ids)
+        if not conversation:
+            raise HTTPException(status_code=404, detail="Conversation not found")
+        return conversation
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error updating conversation documents: {str(e)}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+@router.delete("/conversations/{conv_id}")
+async def delete_conversation(conv_id: str):
+    """Delete a conversation"""
+    try:
+        success = conversation_service.delete_conversation(conv_id)
+        if not success:
+            raise HTTPException(status_code=404, detail="Conversation not found")
+        return {"message": "Conversation deleted successfully", "id": conv_id}
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error deleting conversation: {str(e)}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+# ============= CHAT ENDPOINTS =============
+
+@router.post("/conversations/{conv_id}/messages", response_model=ChatResponse)
+async def send_message(conv_id: str, request: ChatRequest):
+    """Send a message in a conversation"""
+    try:
+        logger.info(f"Received message for conversation: {conv_id}")
+        
+        conversation = conversation_service.get_conversation(conv_id)
+        if not conversation:
+            raise HTTPException(status_code=404, detail="Conversation not found")
+        
+        user_message = Message(
+            role="user",
+            content=request.query,
+            timestamp=datetime.now().isoformat()
+        )
+        conversation_service.add_message(conv_id, user_message)
+        
+        rag_service = get_rag_service()
+        
+        doc_ids = request.document_ids or conversation.document_ids
+        
+        logger.info("Calling RAG service query...")
+        result = rag_service.query(
+            query_text=request.query,
+            doc_ids=doc_ids
+        )
+        
+        logger.info(f"RAG query completed. Response length: {len(result['response'])}")
+        
+        assistant_message = Message(
+            role="assistant",
+            content=result["response"],
+            timestamp=datetime.now().isoformat(),
+            has_mindmap=result["has_mindmap"],
+            mermaid_code=result["mermaid_code"],
+            sources=result["sources"]
+        )
+        conversation_service.add_message(conv_id, assistant_message, auto_title=False)
+        
+        response = ChatResponse(
+            response=result["response"],
+            has_mindmap=result["has_mindmap"],
+            mermaid_code=result["mermaid_code"],
+            sources=result["sources"],
+            timestamp=datetime.now().isoformat()
+        )
+        
+        logger.info(f"Returning response")
+        return response
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error in chat endpoint: {str(e)}")
+        logger.exception("Full traceback:")
+        raise HTTPException(status_code=500, detail=str(e))
+
+@router.post("/conversations/{conv_id}/mindmap", response_model=ChatResponse)
+async def generate_mindmap(conv_id: str, request: ChatRequest):
+    """Generate mind map for a query in a conversation"""
+    try:
+        logger.info(f"Received mindmap request for conversation: {conv_id}")
+        
+        conversation = conversation_service.get_conversation(conv_id)
+        if not conversation:
+            raise HTTPException(status_code=404, detail="Conversation not found")
+        
+        user_message = Message(
+            role="user",
+            content=request.query,
+            timestamp=datetime.now().isoformat()
+        )
+        conversation_service.add_message(conv_id, user_message)
+        
+        rag_service = get_rag_service()
+        doc_ids = request.document_ids or conversation.document_ids
+        
+        result = rag_service.query(
+            query_text=request.query,
+            doc_ids=doc_ids,
+            return_mindmap=True
+        )
+        
+        assistant_message = Message(
+            role="assistant",
+            content=result["response"],
+            timestamp=datetime.now().isoformat(),
+            has_mindmap=result["has_mindmap"],
+            mermaid_code=result["mermaid_code"],
+            sources=result["sources"]
+        )
+        conversation_service.add_message(conv_id, assistant_message, auto_title=False)
+        
+        return ChatResponse(
+            response=result["response"],
+            has_mindmap=result["has_mindmap"],
+            mermaid_code=result["mermaid_code"],
+            sources=result["sources"],
+            timestamp=datetime.now().isoformat()
+        )
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error in mindmap endpoint: {str(e)}")
+        logger.exception("Full traceback:")
+        raise HTTPException(status_code=500, detail=str(e))
+
+@router.get("/health")
+async def health_check():
+    """Health check endpoint"""
+    return {"status": "healthy", "timestamp": datetime.now().isoformat()}
+
+@router.get("/documents/{doc_id}/cad-manifest")
+async def get_cad_manifest(doc_id: str):
+    """Get CAD manifest for a document"""
+    try:
+        from pathlib import Path
+        import json
+        
+        manifest_path = Path(f"cad_manifests/{doc_id}_Model.json")
+        if manifest_path.exists():
+            with open(manifest_path) as f:
+                return json.load(f)
+        else:
+            raise HTTPException(status_code=404, detail="Manifest not found")
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error getting CAD manifest: {str(e)}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+@router.get("/documents/{doc_id}/cad-render")
+async def get_cad_render(doc_id: str):
+    """Get SVG render of CAD file"""
+    try:
+        from pathlib import Path
+        from fastapi.responses import FileResponse
+        
+        svg_path = Path(f"cad_renders/{doc_id}.svg")
+        if svg_path.exists():
+            return FileResponse(svg_path, media_type="image/svg+xml")
+        else:
+            raise HTTPException(status_code=404, detail="Render not found")
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error getting CAD render: {str(e)}")
+        raise HTTPException(status_code=500, detail=str(e))
+# ============= CAD ANALYSIS ENDPOINTS =============
+
+@router.get("/documents/{doc_id}/cad-analysis")
+async def get_cad_analysis(doc_id: str):
+    """Get advanced CAD analysis for a document"""
+    try:
+        analysis = document_service.get_cad_analysis(doc_id)
+        if not analysis:
+            raise HTTPException(status_code=404, detail="CAD analysis not found")
+        return analysis
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error getting CAD analysis: {str(e)}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+@router.post("/documents/{doc_id}/regenerate-cad-analysis")
+async def regenerate_cad_analysis(doc_id: str):
+    """Regenerate advanced CAD analysis for a document"""
+    try:
+        from pathlib import Path
+        from app.cad.advanced_visual_analyzer import AdvancedCADVisualAnalyzer
+        from app.core.config import get_settings
+        import json
+        
+        settings = get_settings()
+        
+        # Check if document exists and is CAD
+        doc = document_service.get_document(doc_id)
+        if not doc:
+            raise HTTPException(status_code=404, detail="Document not found")
+        
+        if not doc.get('is_cad', False):
+            raise HTTPException(status_code=400, detail="Document is not a CAD file")
+        
+        # Find the PNG render
+        png_path = Path(f"cad_renders/{doc_id}_analysis.png")
+        if not png_path.exists():
+            raise HTTPException(status_code=404, detail="CAD render not found - please re-upload the file")
+        
+        logger.info(f"Regenerating CAD analysis for {doc_id}")
+        
+        # Run analysis
+        analyzer = AdvancedCADVisualAnalyzer(settings.GOOGLE_API_KEY)
+        results = analyzer.comprehensive_analysis(str(png_path))
+        
+        # Save results
+        analysis_path = Path(f"cad_manifests/{doc_id}_analysis.json")
+        with open(analysis_path, 'w') as f:
+            json.dump(results, f, indent=2)
+        
+        logger.info(f"CAD analysis saved to {analysis_path}")
+        
+        return {
+            "message": "CAD analysis regenerated successfully",
+            "doc_id": doc_id,
+            "analyses_completed": len(results['analyses']),
+            "has_synthesis": bool(results['summary'].get('executive_summary'))
+        }
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error regenerating CAD analysis: {str(e)}")
+        logger.exception("Full traceback:")
+        raise HTTPException(status_code=500, detail=str(e))
+
+@router.post("/conversations/{conv_id}/advanced-analysis")
+async def run_advanced_analysis(conv_id: str, request: ChatRequest):
+    """
+    Run advanced 5-stage vision analysis on CAD documents
+    Supports multiple AI models (Gemini and OpenRouter)
+    """
+    try:
+        logger.info(f"🤖 Advanced analysis request for conversation: {conv_id}")
+        
+        conversation = conversation_service.get_conversation(conv_id)
+        if not conversation:
+            raise HTTPException(status_code=404, detail="Conversation not found")
+        
+        doc_ids = request.document_ids or conversation.document_ids
+        if not doc_ids:
+            raise HTTPException(status_code=400, detail="No documents selected")
+        
+        # Extract model selection (default: gemini-2.5-flash)
+        selected_model = getattr(request, 'model', 'nvidia/nemotron-nano-12b-v2-vl:free')
+        
+        # Check for CAD documents
+        from app.services.document_service import document_service
+        cad_docs = []
+        for doc_id in doc_ids:
+            doc = document_service.get_document(doc_id)
+            if doc and doc.get('is_cad', False):
+                cad_docs.append(doc)
+        
+        if not cad_docs:
+            raise HTTPException(status_code=400, detail="No CAD documents selected for advanced analysis")
+        
+        # Import multi-model analyzer
+        from app.cad.multi_model_analyzer import MultiModelCADAnalyzer
+        from app.core.config import get_settings
+        from pathlib import Path
+        import json
+        
+        settings = get_settings()
+        analyzer = MultiModelCADAnalyzer(
+            gemini_api_key=settings.GOOGLE_API_KEY,
+            openrouter_api_key=os.getenv('OPENROUTER_API_KEY')
+        )
+        
+        # Validate model
+        if selected_model not in analyzer.MODELS:
+            logger.warning(f"Unknown model {selected_model}, using default")
+            selected_model = 'gemini-2.5-flash'
+        
+        all_analyses = []
+        
+        for doc in cad_docs:
+            doc_id = doc['id']
+            doc_name = doc['name']
+            
+            logger.info(f"Running advanced analysis for: {doc_name} with {selected_model}")
+            
+            # Find PNG
+            png_path = Path(f"cad_renders/{doc_id}_analysis.png")
+            
+            if not png_path.exists():
+                logger.warning(f"PNG not found for {doc_id}, skipping")
+                all_analyses.append(f"⚠️ **{doc_name}**: Analysis PNG not available. Please re-upload this file.")
+                continue
+            
+            try:
+                # Run comprehensive analysis
+                analysis_results = await analyzer.comprehensive_analysis(str(png_path), selected_model)
+                
+                # Save analysis
+                analysis_path = Path(f"cad_manifests/{doc_id}_analysis.json")
+                with open(analysis_path, 'w') as f:
+                    json.dump(analysis_results, f, indent=2)
+                
+                # Format response
+                model_info = analyzer.MODELS[selected_model]
+                formatted = f"""
+# 🔍 ADVANCED CAD ANALYSIS: {doc_name}
+
+**Model**: {model_info['name']} ({model_info['provider'].upper()})
+**Capabilities**: {', '.join(model_info['capabilities'])}
+
+{analyzer.format_for_rag(analysis_results)}
+"""
+                all_analyses.append(formatted)
+                
+            except Exception as e:
+                logger.error(f"Error analyzing {doc_name}: {e}", exc_info=True)
+                all_analyses.append(f"❌ **{doc_name}**: Analysis failed - {str(e)}")
+        
+        if not all_analyses:
+            combined_response = "⚠️ No analyses could be completed. Please ensure CAD files have been properly uploaded."
+        else:
+            combined_response = "\n\n---\n\n".join(all_analyses)
+        
+        # Save to conversation
+        model_name = analyzer.MODELS[selected_model]['name']
+        user_message = Message(
+            role="user",
+            content=f"🤖 Advanced Analysis with {model_name}",
+            timestamp=datetime.now().isoformat()
+        )
+        conversation_service.add_message(conv_id, user_message)
+        
+        assistant_message = Message(
+            role="assistant",
+            content=combined_response,
+            timestamp=datetime.now().isoformat(),
+            has_mindmap=False,
+            mermaid_code=None,
+            sources=[]
+        )
+        conversation_service.add_message(conv_id, assistant_message, auto_title=False)
+        
+        return ChatResponse(
+            response=combined_response,
+            has_mindmap=False,
+            mermaid_code=None,
+            sources=[],
+            timestamp=datetime.now().isoformat()
+        )
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error in advanced analysis: {str(e)}", exc_info=True)
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.get("/models")
+async def get_available_models():
+    """Get list of available AI models for CAD analysis"""
+    try:
+        from app.cad.multi_model_analyzer import MultiModelCADAnalyzer
+        
+        analyzer = MultiModelCADAnalyzer(
+            gemini_api_key=os.getenv('GOOGLE_API_KEY'),
+            openrouter_api_key=os.getenv('OPENROUTER_API_KEY')
+        )
+        
+        return {
+            "models": [
+                {
+                    "id": model_id,
+                    **model_info
+                }
+                for model_id, model_info in analyzer.MODELS.items()
+            ]
+        }
+    except Exception as e:
+        logger.error(f"Error getting models: {e}")
+        return {"models": []}
+
+
+# === NEW HYBRID ANALYSIS ENDPOINT ===
+@router.post("/conversations/{conv_id}/hybrid-analysis")
+async def run_hybrid_analysis(conv_id: str, request: ChatRequest):
+    """
+    Run hybrid CV+LLM analysis on CAD documents
+    Works with both vision and text-only models
+    """
+    try:
+        logger.info(f"🔬 Hybrid analysis request for conversation: {conv_id}")
+        
+        conversation = conversation_service.get_conversation(conv_id)
+        if not conversation:
+            raise HTTPException(status_code=404, detail="Conversation not found")
+        
+        doc_ids = request.document_ids or conversation.document_ids
+        if not doc_ids:
+            raise HTTPException(status_code=400, detail="No documents selected")
+        
+        # Extract model selection
+        selected_model = getattr(request, 'model', 'meta-llama/llama-3.3-70b-instruct:free')
+        
+        # Check for CAD documents
+        from app.services.document_service import document_service
+        cad_docs = []
+        for doc_id in doc_ids:
+            doc = document_service.get_document(doc_id)
+            if doc and doc.get('is_cad', False):
+                cad_docs.append(doc)
+        
+        if not cad_docs:
+            raise HTTPException(status_code=400, detail="No CAD documents for analysis")
+        
+        # Import hybrid analyzer
+        from app.cad.hybrid_analyzer import HybridCADAnalyzer
+        from app.core.config import get_settings
+        from pathlib import Path
+        import json
+        
+        settings = get_settings()
+        analyzer = HybridCADAnalyzer(
+            gemini_api_key=settings.GOOGLE_API_KEY,
+            openrouter_api_key=os.getenv('OPENROUTER_API_KEY')
+        )
+        
+        all_analyses = []
+        
+        for doc in cad_docs:
+            doc_id = doc['id']
+            png_path = f"cad_renders/{doc_id}_analysis.png"
+            
+            if not Path(png_path).exists():
+                logger.warning(f"PNG not found for {doc_id}, skipping")
+                continue
+            
+            logger.info(f"  Analyzing {doc['filename']} with {selected_model}")
+            
+            try:
+                # Determine if model supports vision
+                model_info = analyzer.llm_analyzer.MODELS.get(selected_model)
+                include_vision = model_info and 'vision' in model_info.get('capabilities', [])
+                
+                # Run hybrid analysis
+                result = await analyzer.analyze_with_cv_assistance(
+                    png_path,
+                    selected_model,
+                    include_vision=include_vision
+                )
+                
+                # Save analysis
+                analysis_file = f"cad_manifests/{doc_id}_hybrid_analysis.json"
+                with open(analysis_file, 'w') as f:
+                    json.dump(result, f, indent=2, default=str)
+                
+                all_analyses.append({
+                    "document_id": doc_id,
+                    "filename": doc['filename'],
+                    "analysis": result['combined_analysis'],
+                    "method": result['method'],
+                    "model_used": result['model_used'],
+                    "cv_summary": result['cv_features']['summary']
+                })
+                
+            except Exception as e:
+                logger.error(f"Analysis failed for {doc_id}: {e}")
+                all_analyses.append({
+                    "document_id": doc_id,
+                    "filename": doc['filename'],
+                    "error": str(e)
+                })
+        
+        if not all_analyses:
+            raise HTTPException(status_code=500, detail="All analyses failed")
+        
+        # Format response
+        response_text = "🔬 HYBRID CAD ANALYSIS COMPLETE\n\n"
+        for analysis in all_analyses:
+            if 'error' in analysis:
+                response_text += f"❌ {analysis['filename']}: {analysis['error']}\n\n"
+            else:
+                response_text += f"✅ {analysis['filename']}\n"
+                response_text += f"Method: {analysis['method']}\n"
+                response_text += f"Model: {analysis['model_used']}\n"
+                cv = analysis['cv_summary']
+                response_text += f"CV Detected: {cv['total_shapes']} shapes, {cv['total_lines']} lines\n\n"
+                response_text += f"{analysis['analysis']}\n\n"
+                response_text += "─" * 80 + "\n\n"
+        
+        # Add to conversation
+        assistant_message = Message(
+            role="assistant",
+            content=response_text,
+            document_ids=doc_ids
+        )
+        conversation.messages.append(assistant_message)
+        conversation_service.update_conversation(conversation)
+        
+        return {
+            "conversation_id": conv_id,
+            "message": assistant_message.dict(),
+            "analyses": all_analyses
+        }
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Hybrid analysis error: {str(e)}")
+        logger.exception("Full traceback:")
+        raise HTTPException(status_code=500, detail=str(e))

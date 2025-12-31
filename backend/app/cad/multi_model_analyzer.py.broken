@@ -1,0 +1,170 @@
+"""
+Multi-Model CAD Analyzer
+Supports Gemini (old API) + OpenRouter models
+"""
+
+import os
+import io
+import base64
+import httpx
+import logging
+from typing import Dict, Optional
+from pathlib import Path
+from PIL import Image
+import google.generativeai as genai
+
+logger = logging.getLogger(__name__)
+
+class MultiModelCADAnalyzer:
+    """Advanced CAD analyzer supporting multiple AI models"""
+    
+    MODELS = {
+        "gemini-2.5-flash": {
+            "name": "Gemini 2.5 Flash",
+            "provider": "GEMINI",
+            "capabilities": ["vision", "fast"],
+            "context_window": "1M tokens",
+            "free": True
+        },
+        "deepseek/deepseek-r1": {
+            "name": "DeepSeek R1",
+            "provider": "OPENROUTER",
+            "capabilities": ["reasoning", "advanced"],
+            "context_window": "64K tokens",
+            "free": False
+        },
+        "nvidia/nemotron-nano-12b-v2-vl:free": {
+            "name": "NVIDIA Nemotron Nano VL",
+            "provider": "OPENROUTER",
+            "capabilities": ["vision", "technical"],
+            "context_window": "32K tokens",
+            "free": True
+        },
+        "qwen/qwen3-235b-a22b": {
+            "name": "Qwen 3 235B",
+            "provider": "OPENROUTER",
+            "capabilities": ["reasoning", "advanced"],
+            "context_window": "32K tokens",
+            "free": False
+        }
+    }
+    
+    def __init__(self, gemini_api_key: str = None, openrouter_api_key: str = None):
+        self.gemini_api_key = gemini_api_key or os.getenv('GOOGLE_API_KEY')
+        self.openrouter_api_key = openrouter_api_key or os.getenv('OPENROUTER_API_KEY')
+        
+        if not self.gemini_api_key:
+            raise ValueError("GOOGLE_API_KEY not found")
+        
+        genai.configure(api_key=self.gemini_api_key)
+        self.gemini_model = genai.GenerativeModel('gemini-2.0-flash-exp')
+        
+        if not self.openrouter_api_key:
+            logger.warning("OPENROUTER_API_KEY not found")
+    
+    async def analyze_with_gemini(self, image_bytes: Optional[bytes], prompt: str, model_id: str = "gemini-2.5-flash") -> str:
+        try:
+            if image_bytes:
+                image = Image.open(io.BytesIO(image_bytes))
+                response = self.gemini_model.generate_content([prompt, image])
+            else:
+                response = self.gemini_model.generate_content(prompt)
+            return response.text
+        except Exception as e:
+            raise Exception(f"Gemini API error: {e}")
+    
+    async def analyze_with_openrouter(self, image_bytes: Optional[bytes], prompt: str, model_id: str) -> str:
+        try:
+            url = "https://openrouter.ai/api/v1/chat/completions"
+            headers = {
+                "Authorization": f"Bearer {self.openrouter_api_key}",
+                "Content-Type": "application/json",
+                "HTTP-Referer": "https://documind.app",
+                "X-Title": "DocuMind"
+            }
+            
+            if image_bytes:
+                base64_image = base64.b64encode(image_bytes).decode('utf-8')
+                message_content = [
+                    {"type": "text", "text": prompt},
+                    {"type": "image_url", "image_url": {"url": f"data:image/png;base64,{base64_image}"}}
+                ]
+            else:
+                message_content = prompt
+            
+            payload = {
+                "model": model_id,
+                "messages": [{"role": "user", "content": message_content}]
+            }
+            
+            async with httpx.AsyncClient(timeout=60.0) as client:
+                response = await client.post(url, headers=headers, json=payload)
+                response.raise_for_status()
+                return response.json()['choices'][0]['message']['content']
+        except httpx.HTTPStatusError as e:
+            raise Exception(f"OpenRouter error ({e.response.status_code}): {e.response.text}")
+        except Exception as e:
+            raise Exception(f"OpenRouter failed: {e}")
+    
+    async def comprehensive_analysis(self, png_path: str, model_id: str = "gemini-2.5-flash") -> Dict:
+        if not Path(png_path).exists():
+            raise FileNotFoundError(f"PNG not found: {png_path}")
+        
+        model_info = self.MODELS.get(model_id)
+        if not model_info or 'vision' not in model_info['capabilities']:
+            raise ValueError(f"Model {model_id} doesn't support vision")
+        
+        logger.info(f"🔍 5-stage analysis with {model_info['name']}...")
+        
+        with open(png_path, 'rb') as f:
+            img_bytes = f.read()
+        
+        prompts = {
+            "stage1": "Analyze this CAD: 1) type 2) purpose 3) complexity 4) key features",
+            "stage2": "Technical aspects: 1) dimensions 2) standards 3) annotations 4) units",
+            "stage3": "Components: 1) major parts 2) relationships 3) materials 4) features",
+            "stage4": "Measurements: 1) critical dims 2) tolerances 3) angles 4) constraints",
+            "stage5": "Quality: 1) clarity 2) completeness 3) issues 4) recommendations"
+        }
+        
+        results = {}
+        for stage, prompt in prompts.items():
+            logger.info(f"  {stage.title()}...")
+            if model_info['provider'] == 'GEMINI':
+                results[stage] = await self.analyze_with_gemini(img_bytes, prompt, model_id)
+            else:
+                results[stage] = await self.analyze_with_openrouter(img_bytes, prompt, model_id)
+        
+        logger.info("  Executive summary...")
+        summary_prompt = f"Summarize in 2-3 sentences:\n{results['stage1'][:150]}\n{results['stage2'][:150]}"
+        
+        if model_info['provider'] == 'GEMINI':
+            summary = await self.analyze_with_gemini(None, summary_prompt, model_id)
+        else:
+            summary = await self.analyze_with_openrouter(None, summary_prompt, model_id)
+        
+        return {
+            "model_used": model_info['name'],
+            "model_id": model_id,
+            "executive_summary": summary,
+            "stage_1_overview": results['stage1'],
+            "stage_2_technical": results['stage2'],
+            "stage_3_components": results['stage3'],
+            "stage_4_measurements": results['stage4'],
+            "stage_5_quality": results['stage5']
+        }
+    
+    def format_for_rag(self, analysis_results: Dict) -> str:
+        return f"""CAD ANALYSIS ({analysis_results['model_used']})
+
+SUMMARY: {analysis_results['executive_summary']}
+
+OVERVIEW: {analysis_results['stage_1_overview']}
+
+TECHNICAL: {analysis_results['stage_2_technical']}
+
+COMPONENTS: {analysis_results['stage_3_components']}
+
+MEASUREMENTS: {analysis_results['stage_4_measurements']}
+
+QUALITY: {analysis_results['stage_5_quality']}"""

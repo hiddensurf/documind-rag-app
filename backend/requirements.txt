@@ -1,0 +1,41 @@
+# Core FastAPI
+fastapi==0.115.5
+uvicorn[standard]==0.32.1
+python-multipart==0.0.19
+python-dotenv==1.0.1
+# Allow newer pydantic (>=2.11.5) to satisfy llama-index and workflows
+pydantic>=2.11.5,<3.0.0
+pydantic-settings==2.6.1
+aiofiles==24.1.0
+
+# LlamaIndex (constrain numpy first)
+numpy<2.0.0,>=1.23.0
+llama-index-core>=0.13.0,<0.15
+llama-index-vector-stores-pinecone==0.7.1
+llama-index-embeddings-gemini==0.4.1
+llama-index-llms-gemini==0.6.1
+
+# Pinecone (use modern package matching llama-index vector store requirements)
+pinecone>=7.0.0,<8.0.0
+
+# Document Processing
+PyMuPDF==1.24.14
+pymupdf4llm==0.0.17
+python-docx==1.1.2
+
+# CAD Processing
+ezdxf==1.3.3
+matplotlib==3.9.0
+# Use pillow 10.x to satisfy llama-index-llms-gemini and other constraints
+pillow>=10.2.0,<11.0.0
+trimesh==4.5.3
+
+# Vision Analysis (new API)
+google-genai==0.2.2
+google-generativeai==0.8.3
+
+# Image processing for CAD
+cairosvg==2.7.1
+
+# Unstructured (optional) - plain package (no [pdf] extras)
+unstructured==0.16.9
